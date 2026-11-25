@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: wes
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wes"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    command: ["api"]
+    environment: &env
+      WES_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wes
+      WES_DELIVERY_DIR: /deliveries
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  worker:
+    build: .
+    command: ["worker", "--handlers", "examples.interview_pipeline.handlers", "--concurrency", "4"]
+    environment: *env
+    volumes: ["./deliveries:/deliveries"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  scheduler:
+    build: .
+    command: ["scheduler"]
+    environment: *env
+    depends_on:
+      postgres: {condition: service_healthy}
