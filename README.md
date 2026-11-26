@@ -48,6 +48,11 @@ export WES_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/wes
 python -m examples.interview_pipeline.demo      # self-contained end-to-end run
 ```
 
+Open http://localhost:8000 for the web UI: browse and filter runs, watch a run's
+graph and event log update live, complete human steps, and register or start
+workflows. It is one static file, [src/wes/ui/index.html](src/wes/ui/index.html), served
+by the API, so there is no separate frontend build. Interactive API docs are at `/docs`.
+
 Driving it over HTTP:
 
 ```bash

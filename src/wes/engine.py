@@ -123,6 +123,16 @@ class Engine:
         self._spec_cache[(name, row["version"])] = spec
         return row["version"], spec
 
+    def list_workflows(self) -> list[dict[str, Any]]:
+        """Latest version of every registered workflow, by name."""
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT DISTINCT ON (name) name, version, spec->>'description' AS description, "
+                "jsonb_array_length(spec->'steps') AS step_count, "
+                "count(*) OVER (PARTITION BY name) AS version_count, created_at "
+                "FROM workflow_definitions ORDER BY name, version DESC"
+            ).fetchall()
+
     def _spec(self, name: str, version: int) -> WorkflowSpec:
         cached = self._spec_cache.get((name, version))
         return cached if cached else self.get_workflow(name, version)[1]
@@ -202,6 +212,32 @@ class Engine:
         )
         run["steps"] = steps
         return run
+
+    def list_runs(
+        self,
+        tenant_id: str | None = None,
+        status: str | None = None,
+        workflow: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Most recent runs first, with top-level step progress for each."""
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "SELECT r.id, r.tenant_id, r.workflow_name, r.workflow_version, r.status, r.error, "
+                "r.created_at, r.updated_at, r.finished_at, "
+                "p.steps_done, p.steps_total, p.waiting_human "
+                "FROM runs r CROSS JOIN LATERAL ("
+                "  SELECT count(*) FILTER (WHERE s.status IN ('succeeded', 'skipped')) AS steps_done, "
+                "         count(*) AS steps_total, "
+                "         coalesce(bool_or(s.status = 'waiting_human'), false) AS waiting_human "
+                "  FROM step_runs s WHERE s.run_id = r.id AND s.parent_step_id IS NULL"
+                ") p "
+                "WHERE (%(tenant)s::text IS NULL OR r.tenant_id = %(tenant)s) "
+                "AND (%(status)s::text IS NULL OR r.status = %(status)s) "
+                "AND (%(workflow)s::text IS NULL OR r.workflow_name = %(workflow)s) "
+                "ORDER BY r.created_at DESC LIMIT %(limit)s",
+                {"tenant": tenant_id, "status": status, "workflow": workflow, "limit": limit},
+            ).fetchall()
 
     def list_events(self, run_id: str, after_id: int = 0, limit: int = 500) -> list[dict[str, Any]]:
         with self.pool.connection() as conn:
