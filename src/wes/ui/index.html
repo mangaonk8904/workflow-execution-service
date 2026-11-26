@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflow Execution Service</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #fff; --text: #1c1d21; --muted: #6a6c76; --border: #e3e5ea; --hover: #f1f3f7;
+  --accent: #3b5bdb; --accent-weak: #e8edff;
+  --ok: #2b8a3e; --ok-weak: #e4f5e8; --bad: #d62f2f; --bad-weak: #fdeaea;
+  --warn: #b26b00; --warn-weak: #fff2d9; --run: #1971c2; --run-weak: #e2effc;
+  --idle: #7d838c; --idle-weak: #f0f2f4; --fan: #6741d9; --fan-weak: #eee9ff;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 8px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111215; --panel: #1a1b1f; --text: #e8e8ec; --muted: #989aa4; --border: #2b2d33; --hover: #222329;
+    --accent: #8098ff; --accent-weak: #232a47;
+    --ok: #57cc6e; --ok-weak: #19301f; --bad: #ff6b6b; --bad-weak: #3a1c1c;
+    --warn: #f5b82e; --warn-weak: #382c10; --run: #4dabf7; --run-weak: #15293b;
+    --idle: #8f939b; --idle-weak: #25262c; --fan: #9b80fa; --fan-weak: #2a2344;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 24px;
+  padding: 0 24px; height: 52px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.brand-mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: #fff;
+  display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+nav { display: flex; gap: 4px; }
+nav a { color: var(--muted); padding: 6px 10px; border-radius: 6px; font-weight: 500; }
+nav a:hover { background: var(--hover); text-decoration: none; color: var(--text); }
+nav a.active { color: var(--text); background: var(--hover); }
+nav .count { margin-left: 6px; background: var(--warn-weak); color: var(--warn); border-radius: 10px;
+  padding: 0 7px; font-size: 12px; font-weight: 600; }
+.health { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
+.health.ok .dot { background: var(--ok); } .health.down .dot { background: var(--bad); }
+
+main { max-width: 1280px; margin: 0 auto; padding: 24px; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+.page-head .spacer { flex: 1; }
+.crumbs { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 16px; }
+.panel.flush { padding: 0; overflow: hidden; }
+.panel.flush > h2 { padding: 14px 16px 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 22px; color: var(--muted); font-size: 13px; }
+.meta b { color: var(--text); font-weight: 500; }
+.muted { color: var(--muted); }
+.empty { padding: 36px 16px; text-align: center; color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr.click { cursor: pointer; } tr.click:hover td { background: var(--hover); }
+tr.child td:first-child { padding-left: 34px; }
+tr.child td { font-size: 13px; }
+tr.detail td { background: var(--bg); }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 1px 9px; border-radius: 999px;
+  font-size: 12px; font-weight: 550; white-space: nowrap; color: var(--idle); background: var(--idle-weak); }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+[data-s=succeeded] { --c: var(--ok); --w: var(--ok-weak); }
+[data-s=failed] { --c: var(--bad); --w: var(--bad-weak); }
+[data-s=running], [data-s=ready] { --c: var(--run); --w: var(--run-weak); }
+[data-s=waiting_human] { --c: var(--warn); --w: var(--warn-weak); }
+[data-s=fanned_out] { --c: var(--fan); --w: var(--fan-weak); }
+[data-s=pending], [data-s=skipped], [data-s=cancelled] { --c: var(--idle); --w: var(--idle-weak); }
+.pill[data-s] { color: var(--c); background: var(--w); }
+.pill[data-s=running]::before { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+.progress { display: flex; align-items: center; gap: 8px; min-width: 130px; font-size: 12px; color: var(--muted); }
+.bar { flex: 1; height: 6px; border-radius: 3px; background: var(--idle-weak); overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+.bar[data-s=succeeded] > span { background: var(--ok); }
+.bar[data-s=failed] > span { background: var(--bad); }
+.tag { font-size: 11.5px; padding: 1px 7px; border-radius: 4px; background: var(--warn-weak); color: var(--warn); font-weight: 550; }
+.tag.idle { background: var(--idle-weak); color: var(--muted); }
+
+button, .btn { font: inherit; font-weight: 500; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+button:hover { background: var(--hover); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { filter: brightness(1.08); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.link { border: none; background: none; padding: 0; color: var(--accent); }
+input, select, textarea { font: inherit; color: var(--text); background: var(--panel);
+  border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-weak); border-color: var(--accent); }
+textarea { font-family: var(--mono); font-size: 12.5px; width: 100%; min-height: 110px; resize: vertical; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.form { display: grid; gap: 12px; }
+.row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.row > label { flex: 1; min-width: 140px; }
+.filters { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+.error-box { color: var(--bad); background: var(--bad-weak); border-radius: 6px; padding: 8px 12px; font-size: 13px; white-space: pre-wrap; }
+.ok-box { color: var(--ok); background: var(--ok-weak); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
+
+pre.json { margin: 0; font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 10px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+details > summary { cursor: pointer; color: var(--muted); font-size: 13px; margin: 4px 0; }
+
+.callout { border: 1px solid var(--warn); background: var(--warn-weak); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; }
+.callout h2 { color: var(--warn); }
+.callout .inner { background: var(--panel); border-radius: 6px; padding: 12px; margin-top: 10px; }
+
+.dag-wrap { overflow-x: auto; padding-bottom: 4px; }
+.dag { position: relative; }
+.dag svg { position: absolute; inset: 0; overflow: visible; }
+.dag path { fill: none; stroke: var(--border); stroke-width: 1.6; }
+.dag path.done { stroke: var(--ok); opacity: 0.6; }
+.node { position: absolute; border: 1px solid var(--border); border-left: 3px solid var(--c, var(--border));
+  background: var(--panel); border-radius: 7px; padding: 7px 10px; cursor: pointer; overflow: hidden;
+  transition: box-shadow 0.15s; }
+.node:hover { box-shadow: 0 2px 10px rgb(0 0 0 / 0.12); }
+.node[data-s] { background: color-mix(in srgb, var(--w) 55%, var(--panel)); }
+.node .nid { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node .nmeta { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node[data-s=running] { animation: glow 1.4s ease-in-out infinite; }
+@keyframes glow { 50% { box-shadow: 0 0 0 3px var(--run-weak); } }
+
+.events { list-style: none; margin: 0; padding: 0; max-height: 460px; overflow: auto; }
+.events li { display: grid; grid-template-columns: 70px 1fr; gap: 10px; padding: 7px 16px; border-top: 1px solid var(--border); font-size: 13px; }
+.events time { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+.events .etype { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.events .etype.bad { color: var(--bad); } .events .etype.good { color: var(--ok); } .events .etype.warn { color: var(--warn); }
+.events .payload { color: var(--muted); font-family: var(--mono); font-size: 11.5px; word-break: break-all; cursor: pointer; }
+.events li.fresh { animation: flash 1.5s ease-out; }
+@keyframes flash { from { background: var(--accent-weak); } }
+
+#toast { position: fixed; bottom: 20px; right: 20px; display: grid; gap: 8px; z-index: 20; }
+#toast > div { background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: 8px; font-size: 13px;
+  max-width: 420px; box-shadow: 0 6px 24px rgb(0 0 0 / 0.2); white-space: pre-wrap; }
+#toast > div.bad { background: var(--bad); color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="brand-mark">W</span>Workflow Execution Service</div>
+  <nav>
+    <a href="#/runs" data-nav="runs">Runs</a>
+    <a href="#/tasks" data-nav="tasks">Human tasks<span class="count" id="task-count" hidden></span></a>
+    <a href="#/workflows" data-nav="workflows">Workflows</a>
+    <a href="/docs" target="_blank" rel="noopener">API docs ↗</a>
+  </nav>
+  <div class="health" id="health"><span class="dot"></span><span>checking…</span></div>
+</header>
+<main id="app"></main>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- helpers
+
+/** Build a DOM element. Strings become text nodes, so API data is never parsed as HTML. */
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "class") el.className = v;
+    else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+    else if (k === "value") el.value = v;
+    else el.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat(Infinity)) {
+    if (kid == null || kid === false) continue;
+    el.append(kid instanceof Node ? kid : String(kid));
+  }
+  return el;
+}
+
+class ApiError extends Error {
+  constructor(status, body) {
+    super(formatDetail(body?.detail ?? body) || `HTTP ${status}`);
+    this.status = status;
+  }
+}
+
+function formatDetail(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map(e => {
+      const loc = (e.loc || []).filter(p => p !== "body").join(".");
+      return loc ? `${loc}: ${e.msg}` : e.msg;
+    }).join("\n");
+  }
+  return typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : "";
+}
+
+async function api(path, { method = "GET", body, headers = {} } = {}) {
+  const res = await fetch(path, {
+    method,
+    headers: body !== undefined ? { "content-type": "application/json", ...headers } : headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) throw new ApiError(res.status, data);
+  return data;
+}
+
+function toast(msg, bad = false) {
+  const el = h("div", { class: bad ? "bad" : "" }, msg);
+  document.getElementById("toast").append(el);
+  setTimeout(() => el.remove(), bad ? 7000 : 3500);
+}
+
+const qs = params => {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== "" && v != null) p.set(k, v);
+  const s = p.toString();
+  return s ? `?${s}` : "";
+};
+
+const store = {
+  get: (k, d) => { try { return JSON.parse(localStorage.getItem(`wes.${k}`)) ?? d; } catch { return d; } },
+  set: (k, v) => localStorage.setItem(`wes.${k}`, JSON.stringify(v)),
+};
+
+function rel(t) {
+  if (!t) return "—";
+  const s = (new Date(t).getTime() - Date.now()) / 1000;
+  const a = Math.abs(s);
+  const txt = a < 45 ? `${Math.round(a)}s` : a < 3600 ? `${Math.round(a / 60)}m`
+    : a < 86400 ? `${Math.round(a / 3600)}h` : `${Math.round(a / 86400)}d`;
+  return s < 0 ? `${txt} ago` : `in ${txt}`;
+}
+const timeEl = t => h("span", { title: t ? new Date(t).toLocaleString() : "" }, rel(t));
+function dur(a, b) {
+  if (!a) return "—";
+  const s = ((b ? new Date(b) : new Date()) - new Date(a)) / 1000;
+  if (s < 1) return `${Math.round(s * 1000)}ms`;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+}
+const label = s => s.replace(/_/g, " ");
+const pill = s => h("span", { class: "pill", "data-s": s }, label(s));
+const shortId = id => id.slice(0, 8);
+const jsonPre = v => h("pre", { class: "json" }, JSON.stringify(v, null, 2));
+const DONE = new Set(["succeeded", "skipped"]);
+
+function parseJsonField(text, what) {
+  try {
+    const v = JSON.parse(text || "{}");
+    if (typeof v !== "object" || v === null || Array.isArray(v)) throw new Error("must be a JSON object");
+    return v;
+  } catch (e) { throw new Error(`${what}: ${e.message}`); }
+}
+
+// ---------------------------------------------------------------- routing + polling
+
+const app = document.getElementById("app");
+let gen = 0;  // bumped on every navigation; stale async work checks it and bails
+
+function route() {
+  gen++;
+  const [section = "runs", arg] = location.hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", a.dataset.nav === section));
+  app.replaceChildren();
+  if (section === "runs" && arg) return viewRun(arg);
+  if (section === "tasks") return viewTasks();
+  if (section === "workflows" && arg) return viewWorkflow(arg);
+  if (section === "workflows") return viewWorkflows();
+  return viewRuns();
+}
+window.addEventListener("hashchange", route);
+
+/** Call fn now and then repeatedly until the user navigates away. fn may return the next delay in ms. */
+function poll(fn, ms) {
+  const mine = gen;
+  const tick = async () => {
+    if (mine !== gen) return;
+    let next = ms;
+    try { const r = await fn(); if (typeof r === "number") next = r; }
+    catch (e) { console.error(e); }
+    if (mine === gen) setTimeout(tick, document.hidden ? Math.max(next, 15000) : next);
+  };
+  tick();
+}
+
+/** Returns true only when data differs from the last call, so polling doesn't clobber open forms. */
+function changeTracker() {
+  let last;
+  return data => { const k = JSON.stringify(data); if (k === last) return false; last = k; return true; };
+}
+
+// ---------------------------------------------------------------- DAG
+
+const NODE_W = 124, NODE_H = 52, COL_GAP = 34, ROW_GAP = 14, PAD = 12;
+
+/** Lay out a workflow's steps by dependency depth and draw them, coloured by step status if given. */
+function renderDag(spec, steps, onPick) {
+  const byId = Object.fromEntries(spec.steps.map(s => [s.id, s]));
+  const deps = id => (byId[id].depends_on || []).filter(d => byId[d]);
+  const depth = {};
+  const visiting = new Set();
+  const depthOf = id => {
+    if (id in depth) return depth[id];
+    if (visiting.has(id)) throw new Error(`cycle through '${id}'`);
+    visiting.add(id);
+    const ds = deps(id);
+    depth[id] = ds.length ? 1 + Math.max(...ds.map(depthOf)) : 0;
+    visiting.delete(id);
+    return depth[id];
+  };
+  spec.steps.forEach(s => depthOf(s.id));
+
+  const layers = [];
+  spec.steps.forEach(s => (layers[depth[s.id]] ??= []).push(s.id));
+
+  const status = {}, kids = {};
+  for (const st of steps || []) {
+    if (st.parent_step_id) {
+      const k = (kids[st.parent_step_id] ??= { done: 0, total: 0 });
+      k.total++;
+      if (DONE.has(st.status)) k.done++;
+    } else status[st.step_id] = st.status;
+  }
+
+  // Edges that skip a layer are routed above the nodes they would otherwise cross.
+  const longEdges = [];
+  spec.steps.forEach(s => deps(s.id).forEach(d => { if (depth[s.id] - depth[d] > 1) longEdges.push([d, s.id]); }));
+  const top = PAD + (longEdges.length ? 14 + 8 * longEdges.length : 0);
+  const maxRows = Math.max(...layers.map(l => l.length));
+  const bodyH = maxRows * NODE_H + (maxRows - 1) * ROW_GAP;
+  const pos = {};
+  layers.forEach((ids, col) => {
+    const layerH = ids.length * NODE_H + (ids.length - 1) * ROW_GAP;
+    ids.forEach((id, row) => {
+      pos[id] = { x: PAD + col * (NODE_W + COL_GAP), y: top + (bodyH - layerH) / 2 + row * (NODE_H + ROW_GAP) };
+    });
+  });
+  const width = PAD * 2 + layers.length * NODE_W + (layers.length - 1) * COL_GAP;
+  const height = top + bodyH + PAD;
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNS, "svg");
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  let lane = 0;
+  spec.steps.forEach(s => deps(s.id).forEach(d => {
+    const a = pos[d], b = pos[s.id];
+    const x1 = a.x + NODE_W, y1 = a.y + NODE_H / 2, x2 = b.x, y2 = b.y + NODE_H / 2;
+    let path;
+    if (depth[s.id] - depth[d] === 1) {
+      const c = COL_GAP / 2;
+      path = `M${x1},${y1} C${x1 + c},${y1} ${x2 - c},${y2} ${x2},${y2}`;
+    } else {
+      const between = layers.slice(depth[d] + 1, depth[s.id]).flat().map(id => pos[id].y);
+      const i = lane++;
+      const laneY = Math.min(...between, y1, y2) - 12 - 8 * i;
+      const xa = x1 + 12 + 4 * i, xb = x2 - 12 - 4 * i;
+      path = roundedPath([[x1, y1], [xa, y1], [xa, laneY], [xb, laneY], [xb, y2], [x2, y2]], 7);
+    }
+    const p = document.createElementNS(svgNS, "path");
+    p.setAttribute("d", path);
+    if (DONE.has(status[d])) p.setAttribute("class", "done");
+    svg.append(p);
+  }));
+
+  const nodes = spec.steps.map(s => {
+    const st = status[s.id];
+    const k = kids[s.id];
+    const bits = [];
+    if (st) bits.push(k ? `${label(st)} ${k.done}/${k.total}` : label(st));
+    if (s.kind === "human") bits.push("human");
+    if (s.foreach) bits.push(k ? "" : "foreach");
+    if (s.when && !st) bits.push("conditional");
+    if (s.type && s.type !== s.id) bits.push(s.type);
+    return h("div", {
+      class: "node", "data-s": st, title: `${s.id}${s.depends_on?.length ? `\nafter: ${s.depends_on.join(", ")}` : ""}`,
+      style: { left: `${pos[s.id].x}px`, top: `${pos[s.id].y}px`, width: `${NODE_W}px`, height: `${NODE_H}px` },
+      onclick: onPick ? () => onPick(s.id) : null,
+    }, h("div", { class: "nid" }, s.id), h("div", { class: "nmeta" }, bits.filter(Boolean).join(" · ") || "task"));
+  });
+  return h("div", { class: "dag-wrap" },
+    h("div", { class: "dag", style: { width: `${width}px`, height: `${height}px` } }, svg, nodes));
+}
+
+function roundedPath(pts, r) {
+  pts = pts.filter((p, i) => i === 0 || p[0] !== pts[i - 1][0] || p[1] !== pts[i - 1][1]);
+  let d = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i - 1], [x, y] = pts[i], [x2, y2] = pts[i + 1];
+    const l1 = Math.hypot(x - x0, y - y0), l2 = Math.hypot(x2 - x, y2 - y);
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    d += ` L${x + (x0 - x) / l1 * rr},${y + (y0 - y) / l1 * rr} Q${x},${y} ${x + (x2 - x) / l2 * rr},${y + (y2 - y) / l2 * rr}`;
+  }
+  const last = pts[pts.length - 1];
+  return `${d} L${last[0]},${last[1]}`;
+}
+
+// ---------------------------------------------------------------- shared pieces
+
+function runsTable(runs, { showWorkflow = true } = {}) {
+  if (!runs.length) return h("div", { class: "empty" }, "No runs match.");
+  return h("table", {},
+    h("thead", {}, h("tr", {},
+      h("th", {}, "Status"), h("th", {}, "Run"), showWorkflow && h("th", {}, "Workflow"), h("th", {}, "Tenant"),
+      h("th", {}, "Progress"), h("th", {}, "Started"), h("th", {}, "Duration"))),
+    h("tbody", {}, runs.map(r => {
+      const pct = r.steps_total ? Math.round((100 * r.steps_done) / r.steps_total) : 0;
+      return h("tr", { class: "click", onclick: () => (location.hash = `#/runs/${r.id}`) },
+        h("td", {}, pill(r.status)),
+        h("td", {}, h("a", { href: `#/runs/${r.id}`, class: "mono", onclick: e => e.stopPropagation() }, shortId(r.id))),
+        showWorkflow && h("td", {}, r.workflow_name, h("span", { class: "muted" }, ` v${r.workflow_version}`)),
+        h("td", {}, r.tenant_id),
+        h("td", {}, h("div", { class: "progress" },
+          h("div", { class: "bar", "data-s": r.status }, h("span", { style: { width: `${pct}%` } })),
+          `${r.steps_done}/${r.steps_total}`,
+          r.waiting_human && r.status === "running" && h("span", { class: "tag" }, "needs review"))),
+        h("td", {}, timeEl(r.created_at)),
+        h("td", { class: "muted" }, dur(r.created_at, r.finished_at)));
+    })));
+}
+
+async function refreshTaskCount() {
+  try {
+    const tasks = await api("/human-tasks?limit=500");
+    const el = document.getElementById("task-count");
+    el.hidden = !tasks.length;
+    el.textContent = tasks.length >= 500 ? "500+" : tasks.length;
+  } catch { /* health indicator covers outages */ }
+}
+
+async function refreshHealth() {
+  const el = document.getElementById("health");
+  try {
+    await api("/healthz");
+    el.className = "health ok"; el.lastChild.textContent = "connected";
+  } catch {
+    el.className = "health down"; el.lastChild.textContent = "API unreachable";
+  }
+}
+
+// ---------------------------------------------------------------- views: runs
+
+async function viewRuns() {
+  const f = store.get("runFilters", { tenant_id: "", status: "", workflow: "" });
+  const tableSlot = h("div", { class: "panel flush" }, h("div", { class: "empty" }, "Loading…"));
+  const wfSelect = h("select", { onchange: e => setF("workflow", e.target.value) }, h("option", { value: "" }, "All workflows"));
+  const setF = (k, v) => { f[k] = v; store.set("runFilters", f); load(); };
+
+  app.append(
+    h("div", { class: "page-head" }, h("h1", {}, "Runs"), h("div", { class: "spacer" }),
+      h("button", { class: "primary", onclick: () => (location.hash = "#/workflows") }, "Start a run")),
+    h("div", { class: "filters" },
+      h("label", {}, "Tenant", h("input", { value: f.tenant_id, placeholder: "any", onchange: e => setF("tenant_id", e.target.value.trim()) })),
+      h("label", {}, "Status", h("select", { onchange: e => setF("status", e.target.value) },
+        ["", "running", "succeeded", "failed", "cancelled"].map(s =>
+          h("option", { value: s, selected: f.status === s }, s ? label(s) : "Any status")))),
+      h("label", {}, "Workflow", wfSelect)),
+    tableSlot);
+
+  api("/workflows").then(wfs => wfs.forEach(w =>
+    wfSelect.append(h("option", { value: w.name, selected: f.workflow === w.name }, w.name)))).catch(() => {});
+
+  const changed = changeTracker();
+  const mine = gen;
+  async function load() {
+    const runs = await api(`/runs${qs({ ...f, limit: 100 })}`);
+    if (mine !== gen) return;
+    if (!changed([runs, f])) return;
+    tableSlot.replaceChildren(runs.length || f.tenant_id || f.status || f.workflow ? runsTable(runs)
+      : h("div", { class: "empty" }, "No runs yet. ", h("a", { href: "#/workflows" }, "Register a workflow and start one."), ""));
+  }
+  poll(load, 3000);
+}
+
+async function viewRun(runId) {
+  const mine = gen;
+  const ui = { expanded: new Set(), open: new Set() };
+  let spec = null, lastEventId = 0;
+  const slots = {
+    head: h("div"), error: h("div"), human: h("div"), dag: h("div", { class: "panel" }, h("div", { class: "muted" }, "Loading…")),
+    steps: h("div", { class: "panel flush" }), events: h("ul", { class: "events" }), input: h("div"),
+  };
+  const changed = { head: changeTracker(), human: changeTracker(), dag: changeTracker(), steps: changeTracker() };
+  app.append(slots.head, slots.error, slots.human, slots.dag, slots.steps,
+    h("div", { class: "grid2" },
+      h("div", { class: "panel flush" }, h("h2", {}, "Events"), slots.events),
+      h("div", { class: "panel" }, h("h2", {}, "Input"), slots.input)));
+
+  let run;
+  const pickStep = id => {
+    ui.expanded.add(id);
+    renderSteps(true);
+    document.getElementById(`step-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  function renderHead() {
+    if (!changed.head([run.status, run.finished_at, run.error])) return;
+    const act = async (path, verb) => {
+      try { await api(`/runs/${run.id}/${path}`, { method: "POST" }); toast(`Run ${verb}`); refresh(); }
+      catch (e) { toast(e.message, true); }
+    };
+    slots.head.replaceChildren(
+      h("div", { class: "crumbs" }, h("a", { href: "#/runs" }, "Runs"), " / ", h("span", { class: "mono" }, shortId(run.id))),
+      h("div", { class: "page-head" },
+        h("h1", {}, h("a", { href: `#/workflows/${encodeURIComponent(run.workflow_name)}` }, run.workflow_name),
+          h("span", { class: "muted" }, ` v${run.workflow_version}`)),
+        pill(run.status), h("div", { class: "spacer" }),
+        run.status === "running" && h("button", { class: "danger",
+          onclick: () => confirm("Cancel this run? Open steps will be cancelled.") && act("cancel", "cancelled") }, "Cancel run"),
+        run.status === "failed" && h("button", { class: "primary", onclick: () => act("retry", "retried") }, "Retry failed steps")),
+      h("div", { class: "meta", style: { marginBottom: "16px" } },
+        h("span", {}, "Tenant ", h("b", {}, run.tenant_id)),
+        h("span", {}, "Run ", h("b", { class: "mono" }, run.id), " ",
+          h("button", { class: "link", onclick: () => navigator.clipboard?.writeText(run.id).then(() => toast("Copied run id")) }, "copy")),
+        h("span", {}, "Started ", h("b", {}, timeEl(run.created_at))),
+        h("span", {}, "Duration ", h("b", {}, dur(run.created_at, run.finished_at))),
+        run.idempotency_key && h("span", {}, "Idempotency key ", h("b", { class: "mono" }, run.idempotency_key))));
+    slots.error.replaceChildren(run.error ? h("div", { class: "error-box", style: { marginBottom: "16px" } }, run.error) : "");
+  }
+
+  function renderHuman() {
+    const waiting = run.steps.filter(s => s.status === "waiting_human");
+    if (!changed.human(waiting.map(s => [s.step_id, s.sla_due_at, s.escalated_at]))) return;
+    slots.human.replaceChildren(...waiting.map(step => {
+      const stepSpec = spec?.steps.find(s => s.id === step.step_id);
+      const depOutputs = (stepSpec?.depends_on || []).map(d => run.steps.find(s => s.step_id === d)).filter(s => s?.output);
+      const out = h("textarea", { rows: 5 }, JSON.stringify({ verdict: "accept", notes: "" }, null, 2));
+      const actor = h("input", { value: store.get("actor", ""), placeholder: "you@example.com" });
+      const err = h("div");
+      const preset = verdict => () => {
+        try { out.value = JSON.stringify({ ...JSON.parse(out.value), verdict }, null, 2); }
+        catch { out.value = JSON.stringify({ verdict }, null, 2); }
+      };
+      const submit = async e => {
+        e.target.disabled = true; err.replaceChildren();
+        try {
+          const output = parseJsonField(out.value, "Output");
+          store.set("actor", actor.value.trim());
+          await api(`/runs/${run.id}/steps/${encodeURIComponent(step.step_id)}/complete`,
+            { method: "POST", body: { output, actor: actor.value.trim() || null } });
+          toast(`Completed ${step.step_id}`);
+          refresh();
+        } catch (ex) { err.replaceChildren(h("div", { class: "error-box" }, ex.message)); e.target.disabled = false; }
+      };
+      const overdue = step.sla_due_at && new Date(step.sla_due_at) < new Date();
+      return h("div", { class: "callout" },
+        h("h2", {}, `Waiting for a person: ${step.step_id}`),
+        h("div", { class: "meta" },
+          h("span", {}, "Waiting ", h("b", {}, timeEl(step.started_at))),
+          step.sla_due_at && h("span", {}, overdue ? "SLA breached " : "SLA due ", h("b", {}, timeEl(step.sla_due_at))),
+          step.escalated_at && h("span", { class: "tag" }, "escalated")),
+        h("div", { class: "inner form" },
+          depOutputs.length > 0 && h("div", {}, depOutputs.map(d =>
+            h("details", {}, h("summary", {}, `Output of ${d.step_id}`), jsonPre(d.output)))),
+          h("label", {}, "Result (JSON, passed to downstream steps)", out),
+          h("div", { class: "row" },
+            h("label", {}, "Completed by", actor),
+            h("button", { onclick: preset("accept") }, "verdict: accept"),
+            h("button", { onclick: preset("reject") }, "verdict: reject"),
+            h("button", { class: "primary", onclick: submit }, "Complete step")),
+          err));
+    }));
+  }
+
+  function renderDagPanel() {
+    if (!spec || !changed.dag(run.steps.map(s => [s.step_id, s.status]))) return;
+    slots.dag.replaceChildren(h("h2", {}, "Graph"), renderDag(spec, run.steps, pickStep));
+  }
+
+  function renderSteps(force = false) {
+    if (!changed.steps([run.steps, [...ui.expanded], [...ui.open]]) && !force) return;
+    const children = {};
+    run.steps.filter(s => s.parent_step_id).forEach(s => (children[s.parent_step_id] ??= []).push(s));
+    const rows = [];
+    const toggle = id => { ui.expanded.has(id) ? ui.expanded.delete(id) : ui.expanded.add(id); renderSteps(true); };
+    const addRow = (s, isChild) => {
+      const kid = children[s.step_id];
+      const done = kid?.filter(k => DONE.has(k.status)).length;
+      rows.push(h("tr", { class: `click${isChild ? " child" : ""}`, id: `step-${s.step_id}`, onclick: () => toggle(s.step_id) },
+        h("td", {}, h("span", { class: "mono" }, s.step_id),
+          kid && h("button", { class: "link", style: { marginLeft: "10px", fontSize: "12px" },
+            onclick: e => { e.stopPropagation(); ui.open.has(s.step_id) ? ui.open.delete(s.step_id) : ui.open.add(s.step_id); renderSteps(true); } },
+            `${ui.open.has(s.step_id) ? "hide" : "show"} ${kid.length} items (${done} done)`)),
+        h("td", {}, pill(s.status)),
+        h("td", { class: "muted" }, s.kind === "human" ? "human" : s.step_type),
+        h("td", { class: "muted" }, s.kind === "human" || kid ? "—" : `${s.attempt}/${s.max_attempts}`),
+        h("td", {}, timeEl(s.started_at)),
+        h("td", { class: "muted" }, s.started_at ? dur(s.started_at, s.finished_at) : "—"),
+        h("td", { style: { color: "var(--bad)", maxWidth: "280px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+          s.error || "")));
+      if (ui.expanded.has(s.step_id)) {
+        rows.push(h("tr", { class: "detail" }, h("td", { colspan: 7 }, h("div", { class: "form" },
+          h("div", { class: "meta" },
+            s.lease_owner && s.status === "running" && h("span", {}, "Worker ", h("b", { class: "mono" }, s.lease_owner)),
+            s.lease_expires_at && s.status === "running" && h("span", {}, "Lease expires ", h("b", {}, timeEl(s.lease_expires_at))),
+            s.status === "ready" && s.available_at && h("span", {}, "Claimable ", h("b", {}, timeEl(s.available_at))),
+            s.item_index != null && h("span", {}, "Item ", h("b", {}, `#${s.item_index}`)),
+            s.finished_at && h("span", {}, "Finished ", h("b", {}, timeEl(s.finished_at)))),
+          s.error && h("div", { class: "error-box" }, s.error),
+          s.output != null ? jsonPre(s.output) : h("div", { class: "muted" }, "No output yet.")))));
+      }
+      if (kid && ui.open.has(s.step_id)) kid.forEach(k => addRow(k, true));
+    };
+    run.steps.filter(s => !s.parent_step_id).forEach(s => addRow(s, false));
+    slots.steps.replaceChildren(h("h2", {}, "Steps"), h("table", {},
+      h("thead", {}, h("tr", {}, ["Step", "Status", "Type", "Attempt", "Started", "Took", "Error"].map(t => h("th", {}, t)))),
+      h("tbody", {}, rows)));
+  }
+
+  async function refresh() {
+    try {
+      run = await api(`/runs/${encodeURIComponent(runId)}`);
+    } catch (e) {
+      if (mine === gen && e.status === 404) app.replaceChildren(h("div", { class: "empty" }, "Run not found. ", h("a", { href: "#/runs" }, "Back to runs")));
+      throw e;
+    }
+    if (mine !== gen) return;
+    if (!spec) {
+      spec = (await api(`/workflows/${encodeURIComponent(run.workflow_name)}?version=${run.workflow_version}`)).spec;
+      slots.input.replaceChildren(jsonPre(run.input));
+    }
+    renderHead(); renderHuman(); renderDagPanel(); renderSteps();
+
+    const events = await api(`/runs/${run.id}/events?after_id=${lastEventId}`);
+    if (mine !== gen) return;
+    const fresh = lastEventId > 0;
+    for (const ev of events) {
+      lastEventId = ev.id;
+      const tone = /failed|breached|cancel/.test(ev.type) ? "bad" : /succeeded|completed/.test(ev.type) ? "good"
+        : /human|escalat/.test(ev.type) ? "warn" : "";
+      const payload = ev.payload && Object.keys(ev.payload).length ? JSON.stringify(ev.payload) : "";
+      const pl = payload && h("div", { class: "payload", title: "click to expand" }, payload.length > 140 ? `${payload.slice(0, 140)}…` : payload);
+      if (pl && payload.length > 140) pl.onclick = () => { pl.textContent = JSON.stringify(ev.payload, null, 2); pl.style.whiteSpace = "pre-wrap"; };
+      slots.events.prepend(h("li", { class: fresh ? "fresh" : "" },
+        h("time", { title: new Date(ev.created_at).toLocaleString() }, new Date(ev.created_at).toLocaleTimeString([], { hour12: false })),
+        h("div", {}, h("span", { class: `etype ${tone}` }, ev.type), ev.step_id && h("span", { class: "muted" }, `  ${ev.step_id}`), pl)));
+    }
+    return run.status === "running" ? 1500 : 15000;
+  }
+  poll(refresh, 1500);
+}
+
+// ---------------------------------------------------------------- views: human tasks
+
+async function viewTasks() {
+  const tenant = h("input", { value: store.get("taskTenant", ""), placeholder: "any",
+    onchange: e => { store.set("taskTenant", e.target.value.trim()); load(); } });
+  const slot = h("div", { class: "panel flush" }, h("div", { class: "empty" }, "Loading…"));
+  app.append(h("div", { class: "page-head" }, h("h1", {}, "Human tasks")),
+    h("div", { class: "filters" }, h("label", {}, "Tenant", tenant)), slot);
+  const mine = gen;
+  const changed = changeTracker();
+  async function load() {
+    const tasks = await api(`/human-tasks${qs({ tenant_id: tenant.value.trim(), limit: 200 })}`);
+    if (mine !== gen || !changed(tasks)) return;
+    slot.replaceChildren(!tasks.length ? h("div", { class: "empty" }, "Nothing is waiting on a person right now.") :
+      h("table", {},
+        h("thead", {}, h("tr", {}, ["Step", "Workflow", "Run", "Tenant", "Waiting", "SLA", ""].map(t => h("th", {}, t)))),
+        h("tbody", {}, tasks.map(t => {
+          const overdue = t.sla_due_at && new Date(t.sla_due_at) < new Date();
+          return h("tr", { class: "click", onclick: () => (location.hash = `#/runs/${t.run_id}`) },
+            h("td", {}, h("span", { class: "mono" }, t.step_id)),
+            h("td", {}, t.workflow_name),
+            h("td", {}, h("span", { class: "mono" }, shortId(t.run_id))),
+            h("td", {}, t.tenant_id),
+            h("td", {}, timeEl(t.waiting_since)),
+            h("td", { style: { color: overdue ? "var(--bad)" : "" } }, t.sla_due_at ? timeEl(t.sla_due_at) : "—",
+              t.escalated_at && h("span", { class: "tag", style: { marginLeft: "8px" } }, "escalated")),
+            h("td", { style: { textAlign: "right" } }, h("a", { href: `#/runs/${t.run_id}` }, "Review →")));
+        }))));
+  }
+  poll(load, 4000);
+}
+
+// ---------------------------------------------------------------- views: workflows
+
+const WORKFLOW_TEMPLATE = {
+  name: "my-workflow",
+  description: "What this workflow does",
+  steps: [
+    { id: "first" },
+    { id: "second", depends_on: ["first"], retry: { max_attempts: 3 } },
+    { id: "approve", kind: "human", depends_on: ["second"], sla_seconds: 3600 },
+  ],
+};
+
+async function viewWorkflows() {
+  const mine = gen;
+  const list = h("div", { class: "panel flush" }, h("div", { class: "empty" }, "Loading…"));
+  const regPanel = h("div", { class: "panel", hidden: true });
+  const text = h("textarea", { rows: 14 }, JSON.stringify(WORKFLOW_TEMPLATE, null, 2));
+  const preview = h("div");
+  const msg = h("div");
+  const updatePreview = () => {
+    try {
+      const spec = JSON.parse(text.value);
+      if (!Array.isArray(spec.steps) || !spec.steps.length || !spec.steps.every(s => s && typeof s.id === "string")) throw new Error("needs a steps array");
+      preview.replaceChildren(renderDag(spec));
+    } catch (e) { preview.replaceChildren(h("div", { class: "muted" }, `Preview unavailable: ${e.message}`)); }
+  };
+  text.addEventListener("input", updatePreview);
+  updatePreview();
+  regPanel.append(h("h2", {}, "Register a workflow"),
+    h("div", { class: "form" },
+      h("div", { class: "muted" }, "Registering an identical spec returns the existing version; any change creates the next version."),
+      text, preview,
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: async () => {
+        msg.replaceChildren();
+        try {
+          const r = await api("/workflows", { method: "POST", body: JSON.parse(text.value) });
+          msg.replaceChildren(h("div", { class: "ok-box" }, `Registered ${r.name} v${r.version}. `,
+            h("a", { href: `#/workflows/${encodeURIComponent(r.name)}` }, "Open it")));
+          load();
+        } catch (e) { msg.replaceChildren(h("div", { class: "error-box" }, e.message)); }
+      } }, "Register")),
+      msg));
+
+  app.append(h("div", { class: "page-head" }, h("h1", {}, "Workflows"), h("div", { class: "spacer" }),
+    h("button", { class: "primary", onclick: () => { regPanel.hidden = !regPanel.hidden; } }, "Register workflow")),
+  regPanel, list);
+
+  async function load() {
+    const wfs = await api("/workflows");
+    if (mine !== gen) return;
+    if (!wfs.length) regPanel.hidden = false;
+    list.replaceChildren(!wfs.length ? h("div", { class: "empty" }, "No workflows registered yet. Paste a spec above, or POST one to /workflows.") :
+      h("table", {},
+        h("thead", {}, h("tr", {}, ["Name", "Latest", "Steps", "Description", "Registered"].map(t => h("th", {}, t)))),
+        h("tbody", {}, wfs.map(w => h("tr", { class: "click", onclick: () => (location.hash = `#/workflows/${encodeURIComponent(w.name)}`) },
+          h("td", {}, h("b", {}, w.name)),
+          h("td", {}, `v${w.version}`, w.version_count > 1 && h("span", { class: "muted" }, ` (${w.version_count} versions)`)),
+          h("td", {}, w.step_count),
+          h("td", { class: "muted" }, w.description || ""),
+          h("td", {}, timeEl(w.created_at)))))));
+  }
+  load().catch(e => list.replaceChildren(h("div", { class: "error-box" }, e.message)));
+}
+
+async function viewWorkflow(name, version) {
+  const mine = gen;
+  let wf;
+  try { wf = await api(`/workflows/${encodeURIComponent(name)}${qs({ version })}`); }
+  catch (e) {
+    app.replaceChildren(h("div", { class: "empty" }, e.message, " ", h("a", { href: "#/workflows" }, "Back to workflows")));
+    return;
+  }
+  if (mine !== gen) return;
+  const latest = version ? (await api(`/workflows/${encodeURIComponent(name)}`)).version : wf.version;
+
+  const tenant = h("input", { value: store.get("tenant", "default") });
+  const input = h("textarea", { rows: 8 }, "{}");
+  const idem = h("input", { placeholder: "optional — makes the start safe to retry" });
+  const err = h("div");
+  const start = async e => {
+    err.replaceChildren(); e.target.disabled = true;
+    try {
+      const body = { tenant_id: tenant.value.trim(), workflow: name, version: wf.version,
+        input: parseJsonField(input.value, "Input") };
+      if (idem.value.trim()) body.idempotency_key = idem.value.trim();
+      store.set("tenant", body.tenant_id);
+      const run = await api("/runs", { method: "POST", body });
+      location.hash = `#/runs/${run.id}`;
+    } catch (ex) { err.replaceChildren(h("div", { class: "error-box" }, ex.message)); e.target.disabled = false; }
+  };
+  const versions = Array.from({ length: latest }, (_, i) => latest - i);
+  const recent = h("div", { class: "empty" }, "Loading…");
+
+  app.append(
+    h("div", { class: "crumbs" }, h("a", { href: "#/workflows" }, "Workflows"), " / ", name),
+    h("div", { class: "page-head" }, h("h1", {}, name),
+      h("select", { onchange: e => { app.replaceChildren(); viewWorkflow(name, Number(e.target.value)); } },
+        versions.map(v => h("option", { value: v, selected: v === wf.version }, `v${v}${v === latest ? " (latest)" : ""}`)))),
+    wf.spec.description && h("p", { class: "muted", style: { marginTop: "-8px" } }, wf.spec.description),
+    h("div", { class: "panel" }, h("h2", {}, "Graph"), renderDag(wf.spec)),
+    h("div", { class: "grid2" },
+      h("div", { class: "panel" }, h("h2", {}, `Start a run on v${wf.version}`), h("div", { class: "form" },
+        h("div", { class: "row" }, h("label", {}, "Tenant", tenant), h("label", {}, "Idempotency key", idem)),
+        h("label", {}, "Input (JSON object, available to every step)", input),
+        h("div", { class: "row" }, h("button", { class: "primary", onclick: start }, "Start run")),
+        err)),
+      h("div", { class: "panel" }, h("h2", {}, "Spec"), jsonPre(wf.spec))),
+    h("div", { class: "panel flush" }, h("h2", {}, "Recent runs"), recent));
+
+  api(`/runs${qs({ workflow: name, limit: 10 })}`)
+    .then(runs => mine === gen && recent.replaceWith(runsTable(runs, { showWorkflow: false })))
+    .catch(e => recent.replaceChildren(e.message));
+}
+
+// ---------------------------------------------------------------- boot
+
+setInterval(refreshHealth, 10000); refreshHealth();
+setInterval(refreshTaskCount, 8000); refreshTaskCount();
+route();
+</script>
+</body>
+</html>

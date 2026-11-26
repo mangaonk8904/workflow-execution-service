@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import Settings
 from .db import make_pool, migrate
 from .engine import Conflict, Engine, NotFound
 from .models import WorkflowSpec
+
+UI_INDEX = Path(__file__).parent / "ui" / "index.html"
+RunStatus = Literal["running", "succeeded", "failed", "cancelled"]
 
 
 class StartRun(BaseModel):
@@ -58,6 +62,10 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     async def _conflict(_, exc: Conflict):
         return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+    @app.get("/", include_in_schema=False)
+    def ui():
+        return FileResponse(UI_INDEX)
+
     @app.get("/healthz")
     def healthz():
         with eng().pool.connection() as conn:
@@ -67,6 +75,10 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.post("/workflows", status_code=201)
     def register_workflow(spec: WorkflowSpec):
         return {"name": spec.name, "version": eng().register_workflow(spec)}
+
+    @app.get("/workflows")
+    def list_workflows():
+        return eng().list_workflows()
 
     @app.get("/workflows/{name}")
     def get_workflow(name: str, version: int | None = None):
@@ -86,6 +98,15 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         if not created:
             response.status_code = 200  # replay of an earlier request
         return eng().get_run(run_id)
+
+    @app.get("/runs")
+    def list_runs(
+        tenant_id: str | None = None,
+        status: RunStatus | None = None,
+        workflow: str | None = None,
+        limit: int = 50,
+    ):
+        return eng().list_runs(tenant_id, status, workflow, max(1, min(limit, 500)))
 
     @app.get("/runs/{run_id}")
     def get_run(run_id: str):

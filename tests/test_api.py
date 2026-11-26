@@ -56,6 +56,30 @@ def test_full_flow_over_http(client, engine):
     assert events[0]["type"] == "run.started" and events[-1]["type"] == "run.succeeded"
 
 
+def test_list_endpoints_and_ui(client, engine):
+    assert client.get("/workflows").json() == []
+    assert client.get("/runs").json() == []
+    client.post("/workflows", json=SPEC)
+    client.post("/workflows", json={**SPEC, "description": "v2"})
+    [wf] = client.get("/workflows").json()
+    assert (wf["name"], wf["version"], wf["version_count"], wf["step_count"]) == ("api-flow", 2, 2, 3)
+    assert wf["description"] == "v2"
+
+    r1 = client.post("/runs", json={"tenant_id": "t1", "workflow": "api-flow"}).json()["id"]
+    r2 = client.post("/runs", json={"tenant_id": "t2", "workflow": "api-flow"}).json()["id"]
+    client.post(f"/runs/{r2}/cancel")
+    assert [r["id"] for r in client.get("/runs").json()] == [r2, r1]  # newest first
+    assert [r["id"] for r in client.get("/runs", params={"tenant_id": "t1"}).json()] == [r1]
+    assert [r["id"] for r in client.get("/runs", params={"status": "cancelled"}).json()] == [r2]
+    assert client.get("/runs", params={"workflow": "other"}).json() == []
+    assert client.get("/runs", params={"status": "bogus"}).status_code == 422
+    [run] = client.get("/runs", params={"tenant_id": "t1"}).json()
+    assert (run["steps_done"], run["steps_total"], run["waiting_human"]) == (0, 3, False)
+
+    page = client.get("/")
+    assert page.status_code == 200 and "text/html" in page.headers["content-type"]
+
+
 def test_errors_map_to_http_status_codes(client):
     cyclic = {"name": "bad", "steps": [{"id": "a", "depends_on": ["b"]}, {"id": "b", "depends_on": ["a"]}]}
     assert client.post("/workflows", json=cyclic).status_code == 422
