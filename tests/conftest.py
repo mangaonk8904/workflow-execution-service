@@ -5,7 +5,7 @@ import os
 import psycopg
 import pytest
 
-from wes import Engine, HandlerRegistry, Worker, WorkflowSpec
+from wes import AssetCatalog, Engine, HandlerRegistry, LocalBlobStore, Worker, WorkflowSpec
 from wes.db import make_pool, migrate
 
 TEST_DB = os.environ.get(
@@ -28,8 +28,21 @@ def pool():
 @pytest.fixture
 def engine(pool):
     with pool.connection() as conn:
-        conn.execute("TRUNCATE events, step_runs, runs, workflow_definitions CASCADE")
+        conn.execute(
+            "TRUNCATE asset_edges, assets, events, step_runs, runs, workflow_definitions, "
+            "api_keys CASCADE"
+        )
     return Engine(pool)
+
+
+@pytest.fixture
+def store(tmp_path):
+    return LocalBlobStore(tmp_path / "blobs")
+
+
+@pytest.fixture
+def catalog(engine, store):
+    return AssetCatalog(engine.pool, store)
 
 
 def make_spec(name: str, steps: list[dict]) -> WorkflowSpec:
@@ -38,9 +51,12 @@ def make_spec(name: str, steps: list[dict]) -> WorkflowSpec:
     return WorkflowSpec.model_validate({"name": name, "steps": steps})
 
 
-def drain(engine: Engine, registry: HandlerRegistry, limit: int = 500) -> int:
+def drain(
+    engine: Engine, registry: HandlerRegistry, limit: int = 500,
+    catalog: AssetCatalog | None = None,
+) -> int:
     """Run tasks until the queue is empty. Returns how many were executed."""
-    worker = Worker(engine, registry, worker_id="test-worker")
+    worker = Worker(engine, registry, catalog=catalog, worker_id="test-worker")
     n = 0
     while n < limit and worker.run_once():
         n += 1

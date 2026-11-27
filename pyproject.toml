@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workflow-execution-service"
-version = "0.1.0"
-description = "A small, durable DAG workflow engine on Postgres, with a multimodal interview pipeline example."
+version = "0.2.0"
+description = "A small, durable DAG workflow engine on Postgres with a multimodal asset catalog, lineage and policy."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27"]
+s3 = ["boto3>=1.34"]
+dev = ["pytest>=8", "httpx>=0.27", "boto3>=1.34"]
 
 [project.scripts]
 wes = "wes.__main__:main"

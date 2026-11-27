@@ -1,22 +1,32 @@
 {
-  "video_uri": "s3://interviews-raw/2026/11/exp_4821/interview.mp4",
-  "expert": {"id": "exp_4821", "name": "Jordan Rivera"},
-  "consent": {"share_with_customers": true},
+  "source": {
+    "$asset": "<asset id returned by POST /assets>"
+  },
+  "expert": {
+    "id": "exp_4821",
+    "name": "Jordan Rivera"
+  },
   "turns": [
     {
       "question": "How would you debug a Spark job that fails after four hours?",
       "answer": "I start with the stage that fails, because the symptom is usually an out-of-memory error on a shuffle. In one case 80 percent of rows shared a single key, so I salted the hot key and the job finished in 40 minutes. This is Jordan Rivera, you can reach me at jordan@example.com.",
-      "start": 4.0, "end": 58.5, "asr_confidence": 0.97
+      "start": 4.0,
+      "end": 58.5,
+      "asr_confidence": 0.97
     },
     {
       "question": "How do you decide whether an experiment result is trustworthy?",
       "answer": "I check the experiment design first: was assignment random and was the sample ratio what we planned? Then I look at statistics, because a result with a wide interval is not a result. Call me on 512-555-0142 if you want the notebook.",
-      "start": 61.0, "end": 119.0, "asr_confidence": 0.94
+      "start": 61.0,
+      "end": 119.0,
+      "asr_confidence": 0.94
     },
     {
       "question": "Describe a streaming system you built.",
       "answer": "We used Kafka with one topic per event type and wrote to a single table. The hard part was distributed systems behaviour under retries, therefore every consumer had to be idempotent.",
-      "start": 121.5, "end": 170.0, "asr_confidence": 0.78
+      "start": 121.5,
+      "end": 170.0,
+      "asr_confidence": 0.78
     }
   ]
 }

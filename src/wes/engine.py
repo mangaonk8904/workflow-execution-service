@@ -11,6 +11,8 @@ Concurrency model
 * `attempt` is a fencing token. It is bumped on every claim; a result is only
   accepted from the worker that holds the current attempt.
 * Events are written in the same transaction as the state change (outbox).
+* Assets a step stages are committed in the same transaction that accepts its
+  result, and discarded by every path that does not (see wes.assets).
 """
 
 from __future__ import annotations
@@ -23,18 +25,14 @@ from typing import Any, Callable
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from . import assets
+from .errors import Conflict, Invalid, NotFound
 from .models import StepSpec, WorkflowSpec
 
 DONE = ("succeeded", "skipped")
 OPEN = ["pending", "ready", "waiting_human", "fanned_out"]
 
-
-class NotFound(Exception):
-    pass
-
-
-class Conflict(Exception):
-    pass
+__all__ = ["Conflict", "Engine", "Invalid", "NotFound", "Task"]
 
 
 @dataclass
@@ -51,6 +49,7 @@ class Task:
     params: dict[str, Any]
     item: Any = None
     item_index: int | None = None
+    policy_transforms: dict[str, str] | None = None
 
 
 def _resolve(path: str, outputs: dict[str, Any]) -> Any:
@@ -156,6 +155,10 @@ class Engine:
         version, spec = self.get_workflow(workflow, version)
         run_id = uuid.uuid4()
         with self.pool.connection() as conn, conn.transaction():
+            # Inputs may name assets ({"$asset": id}); they must be this tenant's.
+            error = assets.check_refs(conn, tenant_id, assets.asset_refs(input or {}))
+            if error:
+                raise Invalid(error.replace("output", "run input", 1))
             run = conn.execute(
                 "INSERT INTO runs (id, tenant_id, workflow_name, workflow_version, status, input, "
                 "idempotency_key) VALUES (%s, %s, %s, %s, 'running', %s, %s) "
@@ -195,7 +198,7 @@ class Engine:
             steps = conn.execute(
                 "SELECT step_id, parent_step_id, item_index, step_type, kind, status, attempt, "
                 "max_attempts, available_at, lease_owner, lease_expires_at, sla_due_at, escalated_at, "
-                "remaining_children, output, error, started_at, finished_at "
+                "remaining_children, output, error, handler, started_at, finished_at "
                 "FROM step_runs WHERE run_id = %s",
                 (run_id,),
             ).fetchall()
@@ -390,6 +393,7 @@ class Engine:
             params=step_spec.params,
             item=step["item"],
             item_index=step["item_index"],
+            policy_transforms=step_spec.policy_transforms,
         )
 
     def heartbeat(
@@ -407,14 +411,39 @@ class Engine:
 
     def complete_step(
         self, run_id: str, step_id: str, attempt: int, worker_id: str,
-        output: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None, *, handler: dict[str, Any] | None = None,
     ) -> bool:
-        """Record a result. Returns False if it was stale and has been ignored."""
+        """Record a result. Returns False if it was stale and has been ignored.
+
+        The attempt's staged assets are committed here, atomically with the
+        result. If the output references assets it may not, or an asset fails
+        the step's `requires_policy` gate, the step fails permanently instead.
+        `handler` ({"name", "version", "models"}) is recorded as provenance.
+        """
         with self.pool.connection() as conn, conn.transaction():
             run, step = self._lock_attempt(conn, run_id, step_id, attempt, worker_id)
             if step is None:
                 return False
-            self._succeed(conn, run, step, output)
+            step_spec = self._spec(run["workflow_name"], run["workflow_version"]).step(
+                step["parent_step_id"] or step["step_id"]
+            )
+            committed, error = assets.commit_attempt(
+                conn, run, step, output, step_spec.requires_policy
+            )
+            if error:
+                self._fail(conn, run, step, error, retryable=False)
+                return True
+            if handler is not None:
+                conn.execute(
+                    "UPDATE step_runs SET handler = %s WHERE run_id = %s AND step_id = %s",
+                    (Jsonb(handler), run_id, step_id),
+                )
+            for a in committed:
+                self._emit(conn, run, "asset.committed", step_id, a)
+            extra = {"handler": handler} if handler else {}
+            if committed:
+                extra["assets"] = [a["id"] for a in committed]
+            self._succeed(conn, run, step, output, extra=extra)
             return True
 
     def fail_step(
@@ -458,6 +487,9 @@ class Engine:
                 raise Conflict(
                     f"step is {step['status']} and run is {run['status']}; nothing to complete"
                 )
+            error = assets.check_refs(conn, run["tenant_id"], assets.asset_refs(output))
+            if error:
+                raise Invalid(error)
             self._succeed(conn, run, step, output, extra={"actor": actor})
 
     # ------------------------------------------------------------------ background duties
@@ -577,6 +609,7 @@ class Engine:
         )
 
     def _mark_cancelled(self, conn, step) -> None:
+        assets.discard_attempt(conn, step["run_id"], step["step_id"], step["attempt"])
         conn.execute(
             "UPDATE step_runs SET status = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, "
             "deadline_at = NULL, finished_at = now(), updated_at = now() "
@@ -633,6 +666,7 @@ class Engine:
         self._emit(conn, run, "step.succeeded", parent_step_id, {"children": len(items)})
 
     def _fail(self, conn, run, step, error: str, retryable: bool) -> None:
+        assets.discard_attempt(conn, step["run_id"], step["step_id"], step["attempt"])
         if retryable and step["attempt"] < step["max_attempts"]:
             # Exponential backoff with jitter so retries from one outage don't land together.
             delay = min(

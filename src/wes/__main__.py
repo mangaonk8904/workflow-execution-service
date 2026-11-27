@@ -6,6 +6,7 @@ import signal
 import sys
 import threading
 
+from .auth import ROLES, create_api_key
 from .config import Settings
 from .db import make_pool, migrate
 from .engine import Engine
@@ -25,7 +26,11 @@ def main(argv: list[str] | None = None) -> int:
     worker.add_argument("--handlers", required=True,
                         help="module exposing `registry`, e.g. examples.interview_pipeline.handlers")
     worker.add_argument("--concurrency", type=int, default=4)
-    sub.add_parser("scheduler", help="run the reaper, SLA escalation and outbox relay")
+    sub.add_parser("scheduler", help="run the reaper, SLA escalation, outbox relay and asset GC")
+    key = sub.add_parser("create-key", help="create an API key and print it once")
+    key.add_argument("--principal", required=True, help="who holds the key, e.g. alice@lab-acme")
+    key.add_argument("--role", required=True, choices=ROLES)
+    key.add_argument("--tenant", help="required for operator and reviewer keys")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -42,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "migrate":
         print("applied:", ", ".join(applied) if applied else "nothing to do")
         return 0
+    if args.cmd == "create-key":
+        try:
+            print(create_api_key(pool, principal=args.principal, role=args.role,
+                                 tenant_id=args.tenant))
+        except ValueError as exc:
+            parser.error(str(exc))
+        return 0
 
     engine = Engine(pool, tenant_max_running=settings.tenant_max_running,
                     max_fan_out=settings.max_fan_out)
@@ -49,11 +61,13 @@ def main(argv: list[str] | None = None) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
 
+    catalog = settings.catalog(pool)
     if args.cmd == "worker":
         registry = load_registry(args.handlers)
         threads = [
             threading.Thread(
-                target=Worker(engine, registry, lease_seconds=settings.lease_seconds,
+                target=Worker(engine, registry, catalog=catalog,
+                              lease_seconds=settings.lease_seconds,
                               poll_interval=settings.poll_interval).run_forever,
                 args=(stop,), daemon=True,
             )
@@ -64,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         stop.wait()
     elif args.cmd == "scheduler":
         sink = webhook_sink(settings.webhook_url) if settings.webhook_url else stdout_sink
-        run_scheduler(engine, sink, stop=stop)
+        run_scheduler(engine, sink, stop=stop, catalog=catalog,
+                      gc_grace_seconds=settings.asset_gc_grace_seconds)
     pool.close()
     return 0
 

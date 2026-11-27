@@ -1,8 +1,9 @@
 """End-to-end demo: python -m examples.interview_pipeline.demo
 
-Needs only Postgres (WES_DATABASE_URL). Runs two workers and the scheduler in
-threads, plays the expert reviewer when the human step appears, then prints
-the run and the delivered manifest.
+Needs Postgres (WES_DATABASE_URL); asset bytes go to WES_BLOB_URL (default
+./blobstore). Uploads a stand-in recording with the expert's consent, runs two
+workers and the scheduler in threads, plays the expert reviewer when the human
+step appears, then prints the run, a delivered record and its provenance.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from wes import Engine, Worker, WorkflowSpec
+from wes import Engine, Worker, WorkflowSpec, ref
 from wes.config import Settings
 from wes.db import make_pool, migrate
 from wes.scheduler import run_scheduler
@@ -28,23 +29,36 @@ def main() -> int:
     pool = make_pool(settings.database_url)
     migrate(pool)
     engine = Engine(pool)
+    catalog = settings.catalog(pool)
+
+    source = catalog.upload(
+        "lab-acme", b"\x00\x00\x00\x18ftypmp42 stand-in for a recorded interview",
+        kind="video", media_type="video/mp4", name="interview.mp4",
+        metadata={"duration_seconds": 175.0},
+        policy={"consent": ["internal_processing", "share_with_customers"], "pii": "present",
+                "retention_days": 365},
+        created_by="demo",
+    )
+    print(f"uploaded source recording as asset {source['id']} (sha256 {source['sha256'][:12]}...)")
 
     spec = WorkflowSpec.model_validate_json((HERE / "workflow.json").read_text())
     version = engine.register_workflow(spec)
     run_input = json.loads((HERE / "sample_input.json").read_text())
+    run_input["source"] = ref(source)
     run_id, _ = engine.start_run("lab-acme", spec.name, run_input)
     print(f"registered {spec.name} v{version}; started run {run_id}\n")
 
     stop = threading.Event()
     threads = [
-        threading.Thread(target=Worker(engine, registry, poll_interval=0.05).run_forever,
+        threading.Thread(target=Worker(engine, registry, catalog=catalog,
+                                       poll_interval=0.05).run_forever,
                          args=(stop,), daemon=True)
         for _ in range(2)
     ]
     published: list[dict] = []
     threads.append(threading.Thread(
         target=run_scheduler, args=(engine, published.append),
-        kwargs={"interval": 0.2, "stop": stop}, daemon=True))
+        kwargs={"interval": 0.2, "stop": stop, "catalog": catalog}, daemon=True))
     for t in threads:
         t.start()
 
@@ -75,10 +89,22 @@ def main() -> int:
         print("error:", run["error"])
         return 1
     package = next(s for s in run["steps"] if s["step_id"] == "package")["output"]
-    manifest = json.loads(Path(package["manifest_uri"]).read_text())
-    print(f"manifest: {package['manifest_uri']} ({package['records']} records)")
-    print(f"events recorded: {len(engine.list_events(run_id))}, relayed by outbox: {len(published)}")
-    print("\nfirst record:\n" + json.dumps(manifest["records"][0], indent=2))
+    manifest_id = package["manifest"]["$asset"]
+    meta = catalog.get(manifest_id)
+    with catalog.open(manifest_id) as f:
+        manifest = json.loads(f.read())
+    print(f"manifest: asset {manifest_id} ({package['records']} records), policy {meta['policy']}")
+    print(f"assets committed: {len(catalog.run_assets(run_id))}; events recorded: "
+          f"{len(engine.list_events(run_id))}, relayed by outbox: {len(published)}")
+    first = manifest["records"][0]
+    print("\nfirst record:\n" + json.dumps(first["content"], indent=2))
+    prov = first["provenance"]
+    print("\nits provenance, newest first:")
+    for node in prov["chain"]:
+        print(f"  {'  ' * node['depth']}{node['name']} ({node['kind']})")
+    for span in prov["media_spans"]:
+        print(f"  spoken at {span['start']}s-{span['end']}s of the recording's audio track")
+    print(f"  built by: {', '.join(prov['handlers'])}")
     pool.close()
     return 0
 

@@ -24,6 +24,10 @@ class Context:
     item: Any = None              # fan-out children only
     item_index: int | None = None
     lost_lease: threading.Event = field(default_factory=threading.Event)
+    # wes.assets.AssetClient when the worker has an asset catalog: read input
+    # assets, stage output assets with their lineage. None otherwise.
+    assets: Any = None
+    handler: dict[str, Any] = field(default_factory=dict)  # {"name", "version", "models"}
 
     @property
     def idempotency_key(self) -> str:
@@ -37,17 +41,26 @@ Handler = Callable[[Context], dict[str, Any] | None]
 class HandlerRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, Handler] = {}
+        self._meta: dict[str, dict[str, Any]] = {}
 
-    def register(self, name: str) -> Callable[[Handler], Handler]:
+    def register(
+        self, name: str, *, version: str = "0", models: dict[str, str] | None = None
+    ) -> Callable[[Handler], Handler]:
+        """Register a handler. `version` and `models` are recorded on every result
+        and lineage edge it produces, so outputs can be traced to the exact build."""
         def deco(fn: Handler) -> Handler:
             if name in self._handlers:
                 raise ValueError(f"handler '{name}' already registered")
             self._handlers[name] = fn
+            self._meta[name] = {"name": name, "version": version, "models": dict(models or {})}
             return fn
         return deco
 
     def get(self, name: str) -> Handler:
         return self._handlers[name]
+
+    def meta(self, name: str) -> dict[str, Any]:
+        return dict(self._meta[name])
 
     def types(self) -> list[str]:
         return sorted(self._handlers)

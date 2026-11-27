@@ -10,6 +10,7 @@ import uuid
 
 import psycopg
 
+from .assets import AssetCatalog, AssetClient
 from .engine import Engine, Task
 from .handlers import Context, HandlerRegistry, PermanentError
 
@@ -29,12 +30,14 @@ class Worker:
         engine: Engine,
         registry: HandlerRegistry,
         *,
+        catalog: AssetCatalog | None = None,
         worker_id: str | None = None,
         lease_seconds: float = 30.0,
         poll_interval: float = 0.5,
     ) -> None:
         self.engine = engine
         self.registry = registry
+        self.catalog = catalog
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lease_seconds = lease_seconds
         self.poll_interval = poll_interval
@@ -59,11 +62,19 @@ class Worker:
                 stop.wait(self.poll_interval)
 
     def _execute(self, task: Task) -> None:
+        handler = self.registry.meta(task.step_type)
         ctx = Context(
             run_id=task.run_id, step_id=task.step_id, attempt=task.attempt,
             tenant_id=task.tenant_id, run_input=task.run_input, deps=task.deps,
-            params=task.params, item=task.item, item_index=task.item_index,
+            params=task.params, item=task.item, item_index=task.item_index, handler=handler,
         )
+        if self.catalog is not None:
+            ctx.assets = AssetClient(
+                self.catalog, tenant_id=task.tenant_id, run_id=task.run_id,
+                step_id=task.step_id, attempt=task.attempt, worker_id=self.worker_id,
+                handler=handler, params=task.params,
+                policy_transforms=task.policy_transforms or {},
+            )
         done = threading.Event()
         beat = threading.Thread(target=self._heartbeat, args=(task, ctx, done), daemon=True)
         beat.start()
@@ -80,7 +91,7 @@ class Worker:
                             task.attempt, detail, traceback.format_exc(limit=3))
                 accepted = self._report(self.engine.fail_step, *ident, detail, retryable=True)
             else:
-                accepted = self._report(self.engine.complete_step, *ident, output)
+                accepted = self._report(self.engine.complete_step, *ident, output, handler=handler)
         finally:
             done.set()
             beat.join(timeout=1)

@@ -21,7 +21,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Service containers cannot take a command, and this image needs `server /data`.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            cgr.dev/chainguard/minio:latest server /data
+          for i in $(seq 1 30); do curl -sf localhost:9000/minio/health/live && break; sleep 1; done
       - run: pip install -e ".[dev]"
       - run: pytest -q
         env:
           WES_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/wes_test
+          WES_TEST_S3_ENDPOINT: http://localhost:9000

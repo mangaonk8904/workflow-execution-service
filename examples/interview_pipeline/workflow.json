@@ -2,27 +2,33 @@
   "name": "expert-interview",
   "description": "Turn a recorded expert interview into structured, reviewed, traceable records.",
   "steps": [
-    {"id": "probe", "timeout_seconds": 60, "retry": {"max_attempts": 2}},
+    {
+      "id": "probe", "timeout_seconds": 60, "retry": {"max_attempts": 2},
+      "params": {"required_consent": ["share_with_customers"]}
+    },
     {"id": "normalize", "depends_on": ["probe"], "timeout_seconds": 1800},
     {"id": "segment", "depends_on": ["normalize"], "timeout_seconds": 900},
     {
       "id": "transcribe", "depends_on": ["segment"], "foreach": "segment.segments",
       "timeout_seconds": 600, "retry": {"max_attempts": 4, "backoff_seconds": 1}
     },
-    {"id": "redact", "depends_on": ["transcribe"]},
+    {"id": "redact", "depends_on": ["transcribe"], "policy_transforms": {"pii": "redacted"}},
     {
       "id": "extract", "depends_on": ["redact"], "foreach": "redact.turns",
       "retry": {"max_attempts": 4, "backoff_seconds": 1},
       "params": {"skills_vocabulary": ["python", "sql", "spark", "kafka", "statistics", "experiment design", "causal inference", "distributed systems"]}
     },
     {
-      "id": "quality", "depends_on": ["redact", "extract"],
+      "id": "quality", "depends_on": ["normalize", "extract"],
       "params": {"min_asr_confidence": 0.85, "review_sample_rate": 0.1}
     },
     {
       "id": "expert_review", "kind": "human", "depends_on": ["quality"],
       "when": "quality.needs_review", "sla_seconds": 86400
     },
-    {"id": "package", "depends_on": ["extract", "quality", "expert_review"]}
+    {
+      "id": "package", "depends_on": ["extract", "quality", "expert_review"],
+      "requires_policy": {"consent": ["share_with_customers"], "pii": ["none", "redacted"]}
+    }
   ]
 }

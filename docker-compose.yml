@@ -11,23 +11,42 @@ services:
       timeout: 3s
       retries: 20
 
+  # S3-compatible object store for asset bytes. MinIO's own registries no
+  # longer serve public images; Chainguard publishes a build from source.
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["minio-data:/data"]
+
   api:
     build: .
     command: ["api"]
     environment: &env
       WES_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wes
-      WES_DELIVERY_DIR: /deliveries
+      WES_BLOB_URL: s3://wes-assets
+      WES_S3_ENDPOINT: http://minio:9000
+      WES_S3_REGION: us-east-1
+      WES_S3_CREATE_BUCKET: "true"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      # Development only: an admin key created at startup. Use `wes create-key` for real keys.
+      WES_BOOTSTRAP_ADMIN_KEY: wes_dev_admin_key_change_me_0000
     ports: ["8000:8000"]
     depends_on:
       postgres: {condition: service_healthy}
+      minio: {condition: service_started}
 
   worker:
     build: .
     command: ["worker", "--handlers", "examples.interview_pipeline.handlers", "--concurrency", "4"]
     environment: *env
-    volumes: ["./deliveries:/deliveries"]
     depends_on:
       postgres: {condition: service_healthy}
+      minio: {condition: service_started}
 
   scheduler:
     build: .
@@ -35,3 +54,7 @@ services:
     environment: *env
     depends_on:
       postgres: {condition: service_healthy}
+      minio: {condition: service_started}
+
+volumes:
+  minio-data:
